@@ -11,7 +11,13 @@
 
 local zzlib = {}
 
-local bit = bit32 or bit
+local bit = {
+  band = function (a,b) return a & b end,
+  bxor = function (a,b) return a ~ b end,
+  bnot = function (a) return ~a end,
+  lshift = function (a,b) return a << b end,
+  rshift = function (a,b) return a >> b end,
+}
 local unpack = table.unpack or unpack
 
 local function bitstream_init(file)
@@ -292,12 +298,12 @@ local function crc32(s,crc)
       crc32_table[i] = r
     end
   end
-  crc = bit.bnot(crc or 0)
+  crc = bit.band(bit.bnot(crc or 0),0xffffffff)
   for i=1,#s do
     local c = s:byte(i)
-    crc = bit.bxor(crc32_table[bit.band(bit.bxor(c,crc),0xff)],bit.rshift(crc,8))
+    crc = bit.band(bit.bxor(crc32_table[bit.band(bit.bxor(c,crc),0xff)],bit.rshift(crc,8)),0xffffffff)
   end
-  return bit.bnot(crc)
+  return bit.band(bit.bnot(crc),0xffffffff)
 end
 
 local function inflate_gzip(bs)
