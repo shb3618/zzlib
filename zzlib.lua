@@ -11,13 +11,6 @@
 
 local zzlib = {}
 
-local bit = {
-  band = function (a,b) return a & b end,
-  bxor = function (a,b) return a ~ b end,
-  bnot = function (a) return ~a end,
-  lshift = function (a,b) return a << b end,
-  rshift = function (a,b) return a >> b end,
-}
 local unpack = table.unpack or unpack
 
 local function bitstream_init(file)
@@ -32,7 +25,7 @@ local function bitstream_init(file)
   -- get rid of n first bits
   function bs:flushb(n)
     self.n = self.n - n
-    self.b = bit.rshift(self.b,n)
+    self.b = self.b >> n
   end
   -- peek a number of n bits from stream
   function bs:peekb(n)
@@ -42,26 +35,26 @@ local function bitstream_init(file)
         self.len = self.buf:len()
         self.pos = 1
       end
-      self.b = self.b + bit.lshift(self.buf:byte(self.pos),self.n)
+      self.b = self.b + (self.buf:byte(self.pos)<<self.n)
       self.pos = self.pos + 1
       self.n = self.n + 8
     end
-    return bit.band(self.b,bit.lshift(1,n)-1)
+    return self.b & ((1<<n)-1)
   end
   -- get a number of n bits from stream
   function bs:getb(n)
     local ret = bs:peekb(n)
     self.n = self.n - n
-    self.b = bit.rshift(self.b,n)
+    self.b = self.b >> n
     return ret
   end
   -- get next variable-size of maximum size=n element from stream, according to Huffman table
   function bs:getv(hufftable,n)
     local e = hufftable[bs:peekb(n)]
-    local len = bit.band(e,15)
-    local ret = bit.rshift(e,4)
+    local len = e & 15
+    local ret = e >> 4
     self.n = self.n - len
-    self.b = bit.rshift(self.b,len)
+    self.b = self.b >> len
     return ret
   end
   function bs:close()
@@ -105,7 +98,7 @@ local function hufftable_create(depths)
       local code = next_code[len]
       local rcode = 0
       for j=1,len do
-        rcode = rcode + bit.lshift(bit.band(1,bit.rshift(code,j-1)),len-j)
+        rcode = rcode + ((1&(code>>(j-1))) << (len-j))
       end
       for j=0,2^nbits-1,2^len do
         table[j+rcode] = e
@@ -129,8 +122,8 @@ local function inflate_block_loop(out,bs,nlit,ndist,littable,disttable)
       if lit < 265 then
         size = size + lit - 257
       elseif lit < 285 then
-        nbits = bit.rshift(lit-261,2)
-        size = size + bit.lshift(bit.band(lit-261,3)+4,nbits)
+        nbits = (lit-261) >> 2
+        size = size + ((((lit-261)&3)+4) << nbits)
       else
         size = 258
       end
@@ -141,8 +134,8 @@ local function inflate_block_loop(out,bs,nlit,ndist,littable,disttable)
       if v < 4 then
         dist = dist + v
       else
-        nbits = bit.rshift(v-2,1)
-        dist = dist + bit.lshift(bit.band(v,1)+2,nbits)
+        nbits = (v-2) >> 1
+        dist = dist + (((v&1)+2) << nbits)
         dist = dist + bs:getb(nbits)
       end
       local p = #out-dist+1
@@ -220,13 +213,13 @@ local function inflate_block_static(out,bs)
 end
 
 local function inflate_block_uncompressed(out,bs)
-  bs:flushb(bit.band(bs.n,7))
+  bs:flushb(bs.n&7)
   local len = bs:getb(16)
   if bs.n > 0 then
     error("Unexpected.. should be zero remaining bits in buffer.")
   end
   local nlen = bs:getb(16)
-  if bit.bxor(len,nlen) ~= 65535 then
+  if len~nlen ~= 65535 then
     error("LEN and NLEN don't match")
   end
   for i=bs.pos,bs.pos+len-1 do
@@ -282,7 +275,7 @@ local function inflate_main(bs)
       error("unsupported block type")
     end
   until last == 1
-  bs:flushb(bit.band(bs.n,7))
+  bs:flushb(bs.n&7)
   return arraytostr(output)
 end
 
@@ -293,17 +286,17 @@ local function crc32(s,crc)
     for i=0,255 do
       local r=i
       for j=1,8 do
-        r = bit.bxor(bit.rshift(r,1),bit.band(0xedb88320,bit.bnot(bit.band(r,1)-1)))
+        r = (r >> 1) ~ (0xedb88320 & ~((r & 1) - 1))
       end
       crc32_table[i] = r
     end
   end
-  crc = bit.band(bit.bnot(crc or 0),0xffffffff)
+  crc = (crc or 0) ~ 0xffffffff
   for i=1,#s do
     local c = s:byte(i)
-    crc = bit.band(bit.bxor(crc32_table[bit.band(bit.bxor(c,crc),0xff)],bit.rshift(crc,8)),0xffffffff)
+    crc = crc32_table[c ~ (crc & 0xff)] ~ (crc >> 8)
   end
-  return bit.band(bit.bnot(crc),0xffffffff)
+  return crc ~ 0xffffffff
 end
 
 local function inflate_gzip(bs)
@@ -315,20 +308,20 @@ local function inflate_gzip(bs)
     error("only deflate format is supported")
   end
   bs.pos=11
-  if bit.band(flg,4) ~= 0 then
+  if flg&4 ~= 0 then
     local xl1,xl2 = bs.buf.byte(bs.pos,bs.pos+1)
     local xlen = xl2*256+xl1
     bs.pos = bs.pos+xlen+2
   end
-  if bit.band(flg,8) ~= 0 then
+  if flg&8 ~= 0 then
     local pos = bs.buf:find("\0",bs.pos)
     bs.pos = pos+1
   end
-  if bit.band(flg,16) ~= 0 then
+  if flg&16 ~= 0 then
     local pos = bs.buf:find("\0",bs.pos)
     bs.pos = pos+1
   end
-  if bit.band(flg,2) ~= 0 then
+  if flg&2 ~= 0 then
     -- TODO: check header CRC16
     bs.pos = bs.pos+2
   end
@@ -359,13 +352,13 @@ local function inflate_zlib(bs)
   if (cmf*256+flg)%31 ~= 0 then
     error("zlib header check bits are incorrect")
   end
-  if bit.band(cmf,15) ~= 8 then
+  if cmf&15 ~= 8 then
     error("only deflate format is supported")
   end
-  if bit.rshift(cmf,4) ~= 7 then
+  if cmf>>4 ~= 7 then
     error("unsupported window size")
   end
-  if bit.band(flg,32) ~= 0 then
+  if flg&32 ~= 0 then
     error("preset dictionary not implemented")
   end
   bs.pos=3
@@ -418,11 +411,11 @@ function zzlib.unzip(buf,filename)
       local namelen = buf:int2le(p+26)
       local extlen = buf:int2le(p+28)
       local name = buf:sub(p+30,p+29+namelen)
-      if bit.band(flag,1) ~= 0 then
+      if flag&1 ~= 0 then
         error("no support for encrypted files")
       elseif method ~= 8 and method ~= 0 then
         error("unsupported compression method")
-      elseif bit.band(flag,8) ~= 0 then
+      elseif flag&8 ~= 0 then
         error("no support for the data descriptor record")
       end
       p = p+30+namelen+extlen
